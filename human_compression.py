@@ -6,9 +6,14 @@ Script for running human compression using stable diffusion models and human-use
 import os
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
 import torch
+from openai import OpenAI
+from utils import encode_image
 
 # parameters
 MAX_ITER = 20
+GPT_INIT = True
+PROMPT_MODEL = 'gpt-4-vision-preview'
+MAX_TOKENS = 77
 
 
 def main():
@@ -26,11 +31,12 @@ def main():
     i2i_pipe = i2i_pipe.to(device)
 
     # data directory, contains original source image 'source.jpg'
-    dir = "/home/noah/IterativeRecon/examples/human_compress/"
-    example_name = "giraffe"
-    source_image_path = os.path.join(dir, example_name, "source.jpg")
-    text_file_path = os.path.join(dir, example_name, "chat_history.txt")
+    save_dir = "/home/noah/IterativeRecon/examples/human_compress/giraffe"
+    source_image_path = "/home/noah/IterativeRecon/examples/giraffe_original.jpg"
+    text_file_path = os.path.join(save_dir, "chat_history.txt")
 
+    os.makedirs(save_dir, exist_ok=True)
+    os.system(f'cp {source_image_path} {os.path.join(save_dir, "source.jpg")}')
     with open(text_file_path, "w") as file:
         file.write("Chat History\n")
 
@@ -64,16 +70,46 @@ def main():
         # initial iteration
         if iteration == 0:
 
-            # obtain prompt from human-user
-            prompt = input("\n\nEnter your prompt:\n\n")
+            # if GPT_INIT flag set True, obtain prompt from GPT-4v
+            if GPT_INIT:
+                
+                print("\nGenerating initial prompt with GPT-4v...\n")
+
+                client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+                response = client.chat.completions.create(
+                    model=PROMPT_MODEL,
+                    messages=[
+                        {
+                        "role": "user",
+                        "content": [
+                            {
+                            "type": "text",
+                            "text": f"Provide a detailed caption of this image in {MAX_TOKENS}, including only the most important visual details.",
+                            },
+                            {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpg;base64,{encode_image(source_image_path)}"},
+                            }
+                        ],
+                        }
+                    ],
+                    max_tokens=MAX_TOKENS,
+                )
+
+                prompt = response.choices[0].message.content
+
+                print(f"\n\x1B[3m{prompt}\x1B[0m\n")
+
+            else:
+                # obtain prompt from human-user
+                prompt = input("\n\nEnter your prompt:\n\n")
 
             print("\n\nGenerating image:\n\n")
 
             # generate first reconstruction with stable diffusion
-            images = sd_pipe(prompt=prompt, 
-                             strength=0.7, 
+            images = sd_pipe(prompt=prompt,  
                              num_inference_steps=50, 
-                             guidance_scale=7.5).images
+                             guidance_scale=9.0).images
 
         else:
 
@@ -87,13 +123,13 @@ def main():
             # generate reconstruction with image-to-image model
             images = i2i_pipe(prompt=prompt, 
                                image=y, 
-                               strength=0.7, 
+                               strength=0.6, 
                                num_inference_steps=50, 
                                guidance_scale=7.5).images
         
         # save reconstruction
         y = images[0]
-        y_path = os.path.join(dir, example_name, f"recon_{iteration}.jpg")
+        y_path = os.path.join(save_dir, f"recon_{iteration}.jpg")
         y.save(y_path)
         print(f"\n\nReconstruction saved at {y_path}.\n\n")
 
