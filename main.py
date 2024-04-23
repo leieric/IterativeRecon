@@ -15,9 +15,9 @@ def main(args):
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
     # initialize chat history
-    system_promt = get_system_prompt(args.max_tokens)
+    system_prompt = get_system_prompt(args.max_tokens)
     conv = get_conversation_template(args.describer_model)
-    conv.set_system_message(system_promt)
+    conv.set_system_message(system_prompt)
 
     # flag for initial image reconstruction using ControlNet with sketch condition
     sketch_init = False
@@ -98,26 +98,56 @@ def main(args):
                 
                 print(f"\nGenerating image...\n")
                 images = cn_pipe(prompt=prompt, 
-                            image=source_sketch,
-                            guidance_scale=9.0, 
-                            num_inference_steps=50).images
+                                 image=source_sketch,
+                                 generator=[torch.Generator(device="cuda").manual_seed(args.seed)],
+                                 guidance_scale=9.0, 
+                                 num_inference_steps=50).images
                 
             else:
                 # generate intial reconstruction using Stable Diffusion
                 print(f"\nGenerating image...\n")
                 images = sd_pipe(prompt=prompt, 
-                                 strength=0.6, 
-                                 guidance_scale=8.0).images
+                                 generator=[torch.Generator(device="cuda").manual_seed(args.seed)],
+                                 guidance_scale=8.0,
+                                 num_inference_steps=50).images
                 
             y = images[0]
 
         # GPT-4v receives last reconstruction and outputs a score, improvement, and prompt for next iteration
         else:
+            
+            # prompt separate judge to score similarity of the two images
+            score = client.chat.completions.create(
+                model=args.describer_model,
+                messages=[
+                    {
+                        "type": "text",
+                        "text": "On a scale of 1-10, how similar are these two images? 1 means the two images are not similar at all and 10 means that they are identical."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{encode_image(args.source_image_path)}"
+                        }
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{encode_image(y_path)}"
+                        }
+                    },
+                ]
+            ).choices[0].message.content
+            
             # get GPT-4v score, improvement, and updated response based on previous reconstruction and source image
+            text = f"""
+                   OBJECTIVE: Craft a prompt P where when P is entered to the image-to-image model, the model output image Y is as similar as possible to the source image X. \nSCORE: {score}
+                """
+
             message=[
                 {
                 "type": "text",
-                "text": "Craft a prompt P where when P is entered to the image-to-image model, the model output image Y is as similar as possible to the source image X",
+                "text": text
                 },
                 {
                 "type": "image_url",
@@ -146,8 +176,9 @@ def main(args):
             # update chat history to include GPT-4v response
             conv.append_message(conv.roles[1], response.choices[0].message.content)
             
-            # extract score, improvement, and prompt from GPT-4v response
+            # extract improvement and prompt from GPT-4v response and append score to dictionary
             response_dict, json_str = extract_json(response.choices[0].message.content)
+            response_dict["score"] = score
             response_path = os.path.join(save_path, 'response.json')
             with open(response_path, 'w') as f:
                 json.dump(response_dict, f)
@@ -157,9 +188,10 @@ def main(args):
             y_last = Image.open(os.path.join(args.save_dir, f"iteration_{iteration-1}", "y.png"))
             print(f"\nGenerating image...\n")
             images = i2i_pipe(prompt=response_dict['prompt'], 
-                              image=y_last, 
+                              image=y_last,
+                              generator=[torch.Generator(device="cuda").manual_seed(args.seed)], 
                               strength=1.0, 
-                              num_inference_steps=75, 
+                              num_inference_steps=50, 
                               guidance_scale=9.0).images
             
             y = images[0]
@@ -167,6 +199,9 @@ def main(args):
         y_path = os.path.join(save_path, "y.png")
         y.save(y_path)
         print(f"\nReconstructed image saved at '{y_path}'\n")
+
+        # Truncate conversation to avoid context length issues
+        conv.messages = conv.messages[-2*(args.keep_last_n):]
             
     return
 
@@ -177,28 +212,45 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--describer-model",
+        type=str,
         default="gpt-4-turbo",
         help="Name of describer model."
     )
     parser.add_argument(
         "--source-image-path",
+        type=str,
         default="/home/noah/IterativeRecon/examples/giraffe_original.jpg",
         help="Path to locally saved source image."
     )
     parser.add_argument(
         "--save-dir",
+        type=str,
         required=True,
         help="Path to local directory to save images and prompts."
     )
     parser.add_argument(
         "--n-iter",
+        type=int,
         default=20,
         help="Number of iterations to run."
     )
     parser.add_argument(
         "--max-tokens",
+        type=int,
         default=77,
         help="Max number of tokens in GPT-4v generated prompts."
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed for diffusion model generator."
+    )
+    parser.add_argument(
+        "--keep-last-n",
+        type=int,
+        default=3,
+        help="Number of responses to save in chat history. If this is too large, then it may exceed the context window of the model."
     )
     args = parser.parse_args()
 
