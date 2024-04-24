@@ -117,6 +117,7 @@ def main(args):
         else:
             
             # prompt separate judge to score similarity of the two images
+            print("\nPrompting judge to provide similarity score...\n")
             score = client.chat.completions.create(
                 model=args.describer_model,
                 messages=[
@@ -168,6 +169,7 @@ def main(args):
             
             # query GPT-4v with chat history and new prompt
             chat_history = conv.to_openai_api_messages()
+            print(f"\nPrompting describer model to provide improved image prompt...\n")
             response = client.chat.completions.create(
                             model=args.describer_model,
                             messages=chat_history,
