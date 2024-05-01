@@ -65,7 +65,7 @@ def extract_json(s):
 
     try:
         parsed = ast.literal_eval(json_str)
-        if not all(x in parsed for x in ["score","improvement","prompt"]):
+        if not all(x in parsed for x in ["improvement","prompt"]):
             logging.error("Error in extracted structure. Missing keys.")
             logging.error(f"Extracted:\n {json_str}")
             return None, None

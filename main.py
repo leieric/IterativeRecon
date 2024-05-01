@@ -1,4 +1,5 @@
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, StableDiffusionControlNetPipeline, ControlNetModel, UniPCMultistepScheduler
+from diffusers import AutoPipelineForImage2Image
 import torch
 from PIL import Image
 import os
@@ -12,6 +13,11 @@ import argparse
 
 def main(args):
 
+    # save arguments to yaml file for reference
+    args_path = os.path.join(args.save_dir, "args.json")
+    with open(args_path, 'w') as f:
+        json.dump(args.__dict__, f, indent=2)
+
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
     # initialize chat history
@@ -22,26 +28,25 @@ def main(args):
     # flag for initial image reconstruction using ControlNet with sketch condition
     sketch_init = False
 
-    sd_model_id = "stabilityai/stable-diffusion-2-1-base"
-    cn_model_id = "thibaud/controlnet-sd21-hed-diffusers"
     device = "cuda"
 
     # load Stable Diffusion model
-    sd_pipe = StableDiffusionPipeline.from_pretrained(sd_model_id, torch_dtype=torch.float16)
+    sd_pipe = StableDiffusionPipeline.from_pretrained(args.sd_model_id, torch_dtype=torch.float16)
     sd_pipe = sd_pipe.to(device)
 
     # load Image-to-Image model
-    i2i_pipe = StableDiffusionImg2ImgPipeline.from_pretrained(sd_model_id, torch_dtype=torch.float16)
+    i2i_pipe = AutoPipelineForImage2Image.from_pretrained(args.img2img_model_id, torch_dtype=torch.float16, use_safetensors=True)
+    # StableDiffusionImg2ImgPipeline.from_pretrained(sd_model_id, torch_dtype=torch.float16)
     i2i_pipe = i2i_pipe.to(device)
 
     # load ControlNet model
-    controlnet = ControlNetModel.from_pretrained(cn_model_id, torch_dtype=torch.float16)
-    cn_pipe = StableDiffusionControlNetPipeline.from_pretrained(sd_model_id, 
-                                                                controlnet=controlnet, 
-                                                                torch_dtype=torch.float16, 
-                                                                variant="fp16")
-    cn_pipe.scheduler = UniPCMultistepScheduler.from_config(cn_pipe.scheduler.config)
-    cn_pipe = cn_pipe.to(device)
+    # controlnet = ControlNetModel.from_pretrained(args.cn_model_id, torch_dtype=torch.float16)
+    # cn_pipe = StableDiffusionControlNetPipeline.from_pretrained(args.sd_model_id, 
+    #                                                             controlnet=controlnet, 
+    #                                                             torch_dtype=torch.float16, 
+    #                                                             variant="fp16")
+    # cn_pipe.scheduler = UniPCMultistepScheduler.from_config(cn_pipe.scheduler.config)
+    # cn_pipe = cn_pipe.to(device)
 
     for iteration in range(0, args.n_iter + 1):
         
@@ -99,7 +104,7 @@ def main(args):
                 print(f"\nGenerating image...\n")
                 images = cn_pipe(prompt=prompt, 
                                  image=source_sketch,
-                                 generator=[torch.Generator(device="cuda").manual_seed(args.seed)],
+                                #  generator=[torch.Generator(device="cuda").manual_seed(args.seed)],
                                  guidance_scale=9.0, 
                                  num_inference_steps=50).images
                 
@@ -107,7 +112,7 @@ def main(args):
                 # generate intial reconstruction using Stable Diffusion
                 print(f"\nGenerating image...\n")
                 images = sd_pipe(prompt=prompt, 
-                                 generator=[torch.Generator(device="cuda").manual_seed(args.seed)],
+                                #  generator=[torch.Generator(device="cuda").manual_seed(args.seed)],
                                  guidance_scale=8.0,
                                  num_inference_steps=50).images
                 
@@ -116,33 +121,10 @@ def main(args):
         # GPT-4v receives last reconstruction and outputs a score, improvement, and prompt for next iteration
         else:
             
-            # prompt separate judge to score similarity of the two images
-            print("\nPrompting judge to provide similarity score...\n")
-            score = client.chat.completions.create(
-                model=args.describer_model,
-                messages=[
-                    {
-                        "type": "text",
-                        "text": "On a scale of 1-10, how similar are these two images? 1 means the two images are not similar at all and 10 means that they are identical."
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{encode_image(args.source_image_path)}"
-                        }
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{encode_image(y_path)}"
-                        }
-                    },
-                ]
-            ).choices[0].message.content
-            
             # get GPT-4v score, improvement, and updated response based on previous reconstruction and source image
             text = f"""
-                   OBJECTIVE: Craft a prompt P where when P is entered to the image-to-image model, the model output image Y is as similar as possible to the source image X. \nSCORE: {score}
+                   OBJECTIVE: Craft a prompt P that best describes the necessary changes to transform IMAGE-TO-IMAGE MODEL OUTPUT Y to SOURCE IMAGE X. The first image is the SOURCE IMAGE X, the second image is the IMAGE-TO-IMAGE MODEL OUTPUT Y. 
+                   \nSCORE: {score}
                 """
 
             message=[
@@ -175,32 +157,64 @@ def main(args):
                             messages=chat_history,
                             max_tokens=300,
                         )
-            # update chat history to include GPT-4v response
-            conv.append_message(conv.roles[1], response.choices[0].message.content)
             
-            # extract improvement and prompt from GPT-4v response and append score to dictionary
+            # extract improvement and prompt from GPT-4v response
             response_dict, json_str = extract_json(response.choices[0].message.content)
-            response_dict["score"] = score
-            response_path = os.path.join(save_path, 'response.json')
-            with open(response_path, 'w') as f:
-                json.dump(response_dict, f)
-            print(f"\n[Score]:\n\n{response_dict["score"]}\n\n[Improvement]:\n\n\x1B[3m{response_dict["improvement"]}\x1B[0m\n\n[Prompt]:\n\n\x1B[3m{response_dict["prompt"]}\x1B[0m\n")
+            print(f"\n[Improvement]:\n\n\x1B[3m{response_dict["improvement"]}\x1B[0m\n\n[Prompt]:\n\n\x1B[3m{response_dict["prompt"]}\x1B[0m\n")
 
             # generate reconstruction using img2img model
-            y_last = Image.open(os.path.join(args.save_dir, f"iteration_{iteration-1}", "y.png"))
             print(f"\nGenerating image...\n")
-            images = i2i_pipe(prompt=response_dict['prompt'], 
-                              image=y_last,
-                              generator=[torch.Generator(device="cuda").manual_seed(args.seed)], 
-                              strength=1.0, 
-                              num_inference_steps=50, 
-                              guidance_scale=9.0).images
+            images = i2i_pipe(prompt=response_dict['prompt'],
+                            #   negative_prompt="stylized, cartoon, bad proportions, bad quality, deformed, cropped, unrealistic", 
+                              image=y,
+                            #   generator=[torch.Generator(device="cuda").manual_seed(args.seed)], 
+                              strength=args.strength, 
+                              num_inference_steps=args.num_inference_steps, 
+                              guidance_scale=args.guidance_scale).images
             
             y = images[0]
         
+        # update y_path to most recent reconstructed image
         y_path = os.path.join(save_path, "y.png")
         y.save(y_path)
         print(f"\nReconstructed image saved at '{y_path}'\n")
+
+        # prompt separate judge to score similarity of the two images
+        print("\nPrompting judge to provide similarity score...\n")
+        score_response = client.chat.completions.create(
+            model=args.describer_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content":[
+                        {
+                            "type": "text",
+                            "text": "On a scale of 1-10, how similar are these two images? 1 means the two images are not similar at all and 10 means that they are identical. Your response should only include a single integer in the range 1-10."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{encode_image(args.source_image_path)}"
+                            }
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{encode_image(y_path)}"
+                            }
+                        },
+                    ]
+                }
+            ]
+        )
+
+        score = score_response.choices[0].message.content
+
+        response_dict["score"] = score
+        response_path = os.path.join(save_path, 'response.json')
+        with open(response_path, 'w') as f:
+            json.dump(response_dict, f)
+        print(f"\n[Score]:\n\n{response_dict["score"]}\n")
 
         # Truncate conversation to avoid context length issues
         conv.messages = conv.messages[-2*(args.keep_last_n):]
@@ -253,6 +267,42 @@ if __name__ == "__main__":
         type=int,
         default=3,
         help="Number of responses to save in chat history. If this is too large, then it may exceed the context window of the model."
+    )
+    parser.add_argument(
+        "--strength",
+        type=float,
+        default=0.6,
+        help="Strength parameter in image-to-image model. Scales the number of inference steps. Must be between 0 and 1."
+    )
+    parser.add_argument(
+        "--num-inference-steps",
+        type=int,
+        default=50,
+        help="Number of inference steps in image-to-image model. Scaled by the strength parameter."
+    )
+    parser.add_argument(
+        "--guidance-scale",
+        type=float,
+        default=10.0,
+        help="Guidance scale parameter in image-to-image model. Controls how closely aligned the generated image and text prompt are."
+    )
+    parser.add_argument(
+        "--sd-model-id",
+        type=str,
+        default="stabilityai/stable-diffusion-2-1-base",
+        help="Stable Diffusion base model ID from HuggingFace."
+    )
+    parser.add_argument(
+        "--img2img-model-id",
+        type=str,
+        default="stabilityai/stable-diffusion-2-1-base",
+        help="Image-to-Image base model ID from HuggingFace."
+    )
+    parser.add_argument(
+        "--cn-model-id",
+        type=str,
+        default="thibaud/controlnet-sd21-hed-diffusers",
+        help="ControlNet model ID from HuggingFace."
     )
     args = parser.parse_args()
 
