@@ -1,0 +1,15 @@
+{
+  "describer_model": "gpt-4-turbo",
+  "source_image_path": "/home/Shared/image_datasets/weissman/fire_original.jpg",
+  "save_dir": "results/fire_original",
+  "n_iter": 20,
+  "max_tokens": 77,
+  "seed": 42,
+  "keep_last_n": 3,
+  "strength": 0.6,
+  "num_inference_steps": 50,
+  "guidance_scale": 10.0,
+  "sd_model_id": "stabilityai/stable-diffusion-2-1-base",
+  "img2img_model_id": "stabilityai/stable-diffusion-2-1-base",
+  "cn_model_id": "thibaud/controlnet-sd21-hed-diffusers"
+}

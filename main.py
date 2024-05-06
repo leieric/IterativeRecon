@@ -14,7 +14,10 @@ import argparse
 def main(args):
 
     # save arguments to yaml file for reference
+    img_name = os.path.basename(args.source_image_path).split('.')[0]
+    args.save_dir = f"{args.save_dir}/{img_name}"
     args_path = os.path.join(args.save_dir, "args.json")
+    os.makedirs(args.save_dir, exist_ok=True)
     with open(args_path, 'w') as f:
         json.dump(args.__dict__, f, indent=2)
 
@@ -123,7 +126,7 @@ def main(args):
             
             # get GPT-4v score, improvement, and updated response based on previous reconstruction and source image
             text = f"""
-                   OBJECTIVE: Craft a prompt P that best describes the necessary changes to transform IMAGE-TO-IMAGE MODEL OUTPUT Y to SOURCE IMAGE X. The first image is the SOURCE IMAGE X, the second image is the IMAGE-TO-IMAGE MODEL OUTPUT Y. 
+                   OBJECTIVE: Craft a prompt P that best describes how to change IMAGE-TO-IMAGE MODEL OUTPUT Y into REFERENCE IMAGE X. The first image is the REFERENCE IMAGE X, the second image is the IMAGE-TO-IMAGE MODEL OUTPUT Y. Provide details about how to change the background and landscape, the foreground and subjects in the image, and textures and fine-grained details in order to match that of REFERENCE IMAGE X. Describe how the position and pose of the subjects of the IMAGE-TO-IMAGE MODEL OUTPUT Y can be changed to match that of REFERENCE IMAGE X.
                    \nSCORE: {score}
                 """
 
@@ -160,7 +163,7 @@ def main(args):
             
             # extract improvement and prompt from GPT-4v response
             response_dict, json_str = extract_json(response.choices[0].message.content)
-            print(f"\n[Improvement]:\n\n\x1B[3m{response_dict["improvement"]}\x1B[0m\n\n[Prompt]:\n\n\x1B[3m{response_dict["prompt"]}\x1B[0m\n")
+            print(f"\n[Improvement]:\n\n\x1B[3m{response_dict['improvement']}\x1B[0m\n\n[Prompt]:\n\n\x1B[3m{response_dict['prompt']}\x1B[0m\n")
 
             # generate reconstruction using img2img model
             print(f"\nGenerating image...\n")
@@ -214,7 +217,7 @@ def main(args):
         response_path = os.path.join(save_path, 'response.json')
         with open(response_path, 'w') as f:
             json.dump(response_dict, f)
-        print(f"\n[Score]:\n\n{response_dict["score"]}\n")
+        print(f"\n[Score]:\n\n{response_dict['score']}\n")
 
         # Truncate conversation to avoid context length issues
         conv.messages = conv.messages[-2*(args.keep_last_n):]
@@ -235,7 +238,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--source-image-path",
         type=str,
-        default="/home/noah/IterativeRecon/examples/giraffe_original.jpg",
+        # default="/home/noah/IterativeRecon/examples/giraffe_original.jpg",
+        default="/home/Shared/image_datasets/weissman/fire_original.jpg",
         help="Path to locally saved source image."
     )
     parser.add_argument(
