@@ -31,8 +31,11 @@ def main():
     i2i_pipe = i2i_pipe.to(device)
 
     # data directory, contains original source image 'source.jpg'
-    save_dir = "/home/noah/IterativeRecon/examples/human_compress/giraffe"
-    source_image_path = "/home/noah/IterativeRecon/examples/giraffe_original.jpg"
+    # save_dir = "/home/noah/IterativeRecon/examples/human_compress/giraffe"
+    save_dir = "results_human/"
+    os.makedirs(save_dir, exist_ok=True)
+    # source_image_path = "/home/noah/IterativeRecon/examples/giraffe_original.jpg"
+    source_image_path = "/home/Shared/image_datasets/weissman/giraffe_original.jpg"
     text_file_path = os.path.join(save_dir, "chat_history.txt")
 
     os.makedirs(save_dir, exist_ok=True)
