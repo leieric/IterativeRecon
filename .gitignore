@@ -1,3 +1,4 @@
 /logs
 /annotator
 /examples
+**/__pycache__
